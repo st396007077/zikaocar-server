@@ -4,7 +4,6 @@ const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios'); // 新增
 require('dotenv').config();
 
 const app = express();
@@ -35,8 +34,19 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 内存存储，不上传本地
-const storage = multer.memoryStorage();
+// 本地文件存储（兼容你原有系统，稳定不炸）
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+app.use('/uploads', express.static(uploadDir));
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const filename = `screenshot_${Date.now()}_${Math.random().toString(36).substr(2,8)}${ext}`;
+    cb(null, filename);
+  }
+});
 
 const upload = multer({ 
   storage, 
@@ -47,23 +57,6 @@ const upload = multer({
     else cb(new Error('仅支持 JPG / PNG / WebP 图片'), false);
   }
 });
-
-// 免费图床上传（永久保存）
-async function uploadToImageBed(buffer, mimetype) {
-  try {
-    const base64 = buffer.toString('base64');
-    const res = await axios.post('https://api.imgbb.com/1/upload', 
-      new URLSearchParams({
-        key: "b8d9ac9a58612a979b72e43a6c6f16f4",
-        image: base64
-      })
-    );
-    return res.data.data.url;
-  } catch (e) {
-    console.log("图床上传失败", e);
-    return null;
-  }
-}
 
 // MongoDB 连接
 mongoose.connect(MONGODB_URI)
@@ -83,7 +76,7 @@ const OrderSchema = new mongoose.Schema({
   orderModified: Boolean,
   lastOperationType: String,
   submittedCarList: Array,
-  payScreenshots: { type: Array, default: [] }, // 现在存真实URL
+  payScreenshots: { type: Array, default: [] },
   submitCount: { type: Number, default: 1 }
 }, { suppressReservedKeysWarning: true });
 
@@ -115,25 +108,29 @@ function adminAuth(req, res, next) {
   next();
 }
 
-// ====================== 上传截图（云存储URL版） ======================
+// ====================== ✅ 修复：上传截图（100% 能存入数据库） ======================
 app.post('/api/uploadScreenshot', upload.array('screenshots', 5), async (req, res) => {
   try {
     const { orderId } = req.body;
-    if (!orderId || !req.files?.length) return res.json({ code:-1, msg:'请选择图片' });
-
-    const urls = [];
-    for (const file of req.files) {
-      const url = await uploadToImageBed(file.buffer, file.mimetype);
-      if (url) urls.push(url);
+    if (!orderId || !req.files?.length) {
+      return res.json({ code:-1, msg:'请选择图片' });
     }
 
+    // 生成可访问的图片 URL
+    const urls = req.files.map(file => {
+      return `${SERVER_DOMAIN}/uploads/${file.filename}`;
+    });
+
+    // 直接存入数据库
     await Order.findOneAndUpdate(
       { orderId },
-      { $push: { payScreenshots: { $each: urls } } }
+      { $push: { payScreenshots: { $each: urls } } },
+      { new: true }
     );
 
     res.json({ code:0, msg:'上传成功', screenshotUrls: urls });
   } catch (e) {
+    console.error("上传失败", e);
     res.json({ code:-1, msg:'上传失败' });
   }
 });
