@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-require('dotenv').config(); // 加载环境变量
+require('dotenv').config();
 
 const app = express();
 
@@ -70,7 +70,7 @@ mongoose.connect(MONGODB_URI)
   .then(() => console.log('✅ MongoDB连接成功'))
   .catch(err => console.error('❌ MongoDB连接失败', err));
 
-// 订单模型
+// 订单模型（已修复保留关键字警告）
 const OrderSchema = new mongoose.Schema({
   userName: String,
   userPhone: String,
@@ -80,11 +80,13 @@ const OrderSchema = new mongoose.Schema({
   payType: String,
   createTime: String,
   paymentRecords: Array,
-  isModified: Boolean,
+  orderModified: Boolean, // 这里改名了！
   lastOperationType: String,
   submittedCarList: Array,
   payScreenshots: { type: Array, default: [] },
   submitCount: { type: Number, default: 1 }
+}, {
+  suppressReservedKeysWarning: true // 关闭保留关键字警告
 });
 const Order = mongoose.model('Order', OrderSchema);
 
