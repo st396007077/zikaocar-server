@@ -10,7 +10,7 @@ const app = express();
 
 // ====================== 安全配置：从环境变量读取 ======================
 const MONGODB_URI = process.env.MONGODB_URI;
-const ADMIN_PWD = process.env.ADMON_PWD;
+const ADMIN_PWD = process.env.ADMIN_PWD;
 const SERVER_DOMAIN = process.env.SERVER_DOMAIN;
 
 const FIXED_CAR_ORDER = [
