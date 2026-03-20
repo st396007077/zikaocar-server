@@ -10,7 +10,7 @@ const app = express();
 
 // ====================== 安全配置：从环境变量读取 ======================
 const MONGODB_URI = process.env.MONGODB_URI;
-const ADMIN_PWD = process.env.ADMIN_PWD;
+const ADMIN_PWD = process.env.ADMON_PWD;
 const SERVER_DOMAIN = process.env.SERVER_DOMAIN;
 
 const FIXED_CAR_ORDER = [
@@ -34,43 +34,25 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 上传目录
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-
-// 图片格式安全校验
-const allowedFileTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
-const fileFilter = (req, file, cb) => {
-  if (allowedFileTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(new Error('仅支持 JPG / PNG / WebP 图片'), false);
-  }
-};
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const filename = `screenshot_${Date.now()}_${Math.random().toString(36).substr(2,8)}${ext}`;
-    cb(null, filename);
-  }
-});
+// 内存存储，不保存本地文件（解决重启丢失问题）
+const storage = multer.memoryStorage();
 
 const upload = multer({ 
   storage, 
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: fileFilter
+  fileFilter: (req, file, cb) => {
+    const types = ['image/jpeg','image/png','image/jpg','image/webp'];
+    if(types.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('仅支持 JPG / PNG / WebP 图片'), false);
+  }
 });
 
-app.use('/uploads', express.static(uploadDir));
-
-// MongoDB 连接（环境变量模式）
+// MongoDB 连接
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('✅ MongoDB连接成功'))
   .catch(err => console.error('❌ MongoDB连接失败', err));
 
-// 订单模型（已修复保留关键字警告）
+// 订单模型
 const OrderSchema = new mongoose.Schema({
   userName: String,
   userPhone: String,
@@ -80,14 +62,13 @@ const OrderSchema = new mongoose.Schema({
   payType: String,
   createTime: String,
   paymentRecords: Array,
-  orderModified: Boolean, // 这里改名了！
+  orderModified: Boolean,
   lastOperationType: String,
   submittedCarList: Array,
-  payScreenshots: { type: Array, default: [] },
+  payScreenshots: { type: Array, default: [] }, // 存储 base64
   submitCount: { type: Number, default: 1 }
-}, {
-  suppressReservedKeysWarning: true // 关闭保留关键字警告
-});
+}, { suppressReservedKeysWarning: true });
+
 const Order = mongoose.model('Order', OrderSchema);
 
 // 工具函数
@@ -107,7 +88,7 @@ function isCarListModified(a, b) {
   return na.length !== nb.length || !na.every((v,i) => v === nb[i]);
 }
 
-// ========================= 安全中间件 =========================
+// 管理员权限
 function adminAuth(req, res, next) {
   const pwd = req.body.pwd || req.query.pwd;
   if (!pwd || pwd !== ADMIN_PWD) {
@@ -116,14 +97,22 @@ function adminAuth(req, res, next) {
   next();
 }
 
-// ====================== 上传截图 ======================
+// ====================== 上传截图（存入数据库） ======================
 app.post('/api/uploadScreenshot', upload.array('screenshots', 5), async (req, res) => {
   try {
     const { orderId } = req.body;
     if (!orderId || !req.files?.length) return res.json({ code:-1, msg:'请选择图片' });
-    const urls = req.files.map(f => `${SERVER_DOMAIN}/uploads/${f.filename}`);
-    await Order.findOneAndUpdate({ orderId }, { $push: { payScreenshots: { $each: urls } } });
-    res.json({ code:0, msg:'上传成功', screenshotUrls: urls });
+
+    const base64List = req.files.map(file => {
+      return `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+    });
+
+    await Order.findOneAndUpdate(
+      { orderId },
+      { $push: { payScreenshots: { $each: base64List } } }
+    );
+
+    res.json({ code:0, msg:'上传成功', screenshotUrls: base64List });
   } catch (e) {
     res.json({ code:-1, msg:'上传失败' });
   }
