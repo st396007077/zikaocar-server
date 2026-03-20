@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios'); // 新增
 require('dotenv').config();
 
 const app = express();
@@ -34,7 +35,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 内存存储，不保存本地文件（解决重启丢失问题）
+// 内存存储，不上传本地
 const storage = multer.memoryStorage();
 
 const upload = multer({ 
@@ -46,6 +47,23 @@ const upload = multer({
     else cb(new Error('仅支持 JPG / PNG / WebP 图片'), false);
   }
 });
+
+// 免费图床上传（永久保存）
+async function uploadToImageBed(buffer, mimetype) {
+  try {
+    const base64 = buffer.toString('base64');
+    const res = await axios.post('https://api.imgbb.com/1/upload', 
+      new URLSearchParams({
+        key: "b8d9ac9a58612a979b72e43a6c6f16f4",
+        image: base64
+      })
+    );
+    return res.data.data.url;
+  } catch (e) {
+    console.log("图床上传失败", e);
+    return null;
+  }
+}
 
 // MongoDB 连接
 mongoose.connect(MONGODB_URI)
@@ -65,7 +83,7 @@ const OrderSchema = new mongoose.Schema({
   orderModified: Boolean,
   lastOperationType: String,
   submittedCarList: Array,
-  payScreenshots: { type: Array, default: [] }, // 存储 base64
+  payScreenshots: { type: Array, default: [] }, // 现在存真实URL
   submitCount: { type: Number, default: 1 }
 }, { suppressReservedKeysWarning: true });
 
@@ -97,22 +115,24 @@ function adminAuth(req, res, next) {
   next();
 }
 
-// ====================== 上传截图（存入数据库） ======================
+// ====================== 上传截图（云存储URL版） ======================
 app.post('/api/uploadScreenshot', upload.array('screenshots', 5), async (req, res) => {
   try {
     const { orderId } = req.body;
     if (!orderId || !req.files?.length) return res.json({ code:-1, msg:'请选择图片' });
 
-    const base64List = req.files.map(file => {
-      return `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-    });
+    const urls = [];
+    for (const file of req.files) {
+      const url = await uploadToImageBed(file.buffer, file.mimetype);
+      if (url) urls.push(url);
+    }
 
     await Order.findOneAndUpdate(
       { orderId },
-      { $push: { payScreenshots: { $each: base64List } } }
+      { $push: { payScreenshots: { $each: urls } } }
     );
 
-    res.json({ code:0, msg:'上传成功', screenshotUrls: base64List });
+    res.json({ code:0, msg:'上传成功', screenshotUrls: urls });
   } catch (e) {
     res.json({ code:-1, msg:'上传失败' });
   }
