@@ -34,22 +34,11 @@ const orderSchema = new mongoose.Schema({
   isMultiSubmit: { type: Boolean, default: false }
 });
 
-// ============= 🔥 关键修复：移除有问题的全局中间件 =============
+// ============= 🔥 关键修复：彻底移除所有自动标记中间件 =============
 // ❌ 已移除：orderSchema.pre('findOneAndUpdate', ...) 中间件
-// 原因：这个中间件会导致任何更新carList的操作（包括正常的用户提交）
+// ❌ 已移除：orderSchema.pre('save', ...) 中间件
+// 原因：这些中间件会导致任何更新carList的操作（包括正常的用户提交）
 // 都被错误地标记为"手动修改"
-
-// ✅ 保留：仅处理通过 .save() 方法的修改
-orderSchema.pre('save', function(next) {
-  // 只在保存时检查carList是否被修改
-  if (this.isModified('carList')) {
-    // 注意：这里设置为true，但只对.save()生效
-    // 对于用户正常提交，carList会被修改，但isManuallyModified应该保持false
-    // 这个逻辑需要与接口逻辑配合
-    this.isManuallyModified = true;
-  }
-  next();
-});
 
 const Order = mongoose.model('Order', orderSchema);
 
@@ -171,8 +160,8 @@ app.post('/api/submitOrder', async (req, res) => {
       existingOrder.isMultiSubmit = true;
       existingOrder.paymentRecords.push({ payType, amount: newTotal, time: createTime });
       
-      // 🔥 关键修复：用户正常提交/合并订单时，保持原有的手动修改状态
-      // 不将 isManuallyModified 设置为 true
+      // 🔥 关键修复：用户正常提交/合并订单时，明确设置为false
+      // 除非订单原本就是手动修改的
       existingOrder.isManuallyModified = originalIsManuallyModified;
       
       await existingOrder.save();
@@ -190,7 +179,7 @@ app.post('/api/submitOrder', async (req, res) => {
         payType, 
         createTime,
         isMultiSubmit: false,
-        isManuallyModified: false, // 新订单默认不是手动修改
+        isManuallyModified: false, // 新订单明确设置为false
         payScreenshots: [],
         paymentRecords: [{ payType, amount: newTotal, time: createTime }]
       });
@@ -303,6 +292,12 @@ app.post('/api/updateOrder', async (req, res) => {
       // 🔥 关键修复：只有通过后台修改接口更新carList，才标记为手动修改
       updateData.isManuallyModified = true;
       console.log(`📝 订单 ${orderId} 被标记为手动修改 (通过updateOrder接口)`);
+    } else {
+      // 如果更新了其他字段，保持原有的 isManuallyModified 状态
+      const originalOrder = await Order.findOne({ orderId });
+      if (originalOrder && originalOrder.isManuallyModified) {
+        updateData.isManuallyModified = true;
+      }
     }
     
     const order = await Order.findOneAndUpdate(
@@ -464,6 +459,6 @@ setTimeout(() => {
     console.log(`✅ 服务器运行在端口 ${PORT}`);
     console.log(`📁 数据库连接状态: ${mongoose.connection.readyState === 1 ? '已连接' : '未连接'}`);
     console.log(`🌍 访问地址: http://localhost:${PORT}`);
-    console.log('🔧 修复说明：已移除有问题的中间件，精确控制手动修改标记');
+    console.log('🔧 修复说明：已彻底移除有问题的中间件，精确控制手动修改标记');
   });
 }, 1000);
