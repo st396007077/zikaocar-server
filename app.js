@@ -373,42 +373,42 @@ app.post('/api/updateCarItem', async (req, res) => {
 
 // ====================== 🔥 新增：数据库修复接口（临时使用） ======================
 // ⚠️ 警告：此接口仅供一次性修复使用，修复完成后请立即从代码中删除
-app.post('/api/fixDatabaseManualFlags', async (req, res) => {
-  try {
-    const { pwd, confirm } = req.body;
+// app.post('/api/fixDatabaseManualFlags', async (req, res) => {
+//   try {
+//     const { pwd, confirm } = req.body;
     
-    if (pwd !== process.env.ADMIN_PWD) {
-      return res.json({ code: -1, msg: '密码错误' });
-    }
+//     if (pwd !== process.env.ADMIN_PWD) {
+//       return res.json({ code: -1, msg: '密码错误' });
+//     }
     
-    if (confirm !== 'YES_I_UNDERSTAND') {
-      return res.json({ 
-        code: -1, 
-        msg: '请确认操作：此操作将重置所有订单的"手动修改"标记。确认请在请求体中添加 confirm: "YES_I_UNDERSTAND"' 
-      });
-    }
+//     if (confirm !== 'YES_I_UNDERSTAND') {
+//       return res.json({ 
+//         code: -1, 
+//         msg: '请确认操作：此操作将重置所有订单的"手动修改"标记。确认请在请求体中添加 confirm: "YES_I_UNDERSTAND"' 
+//       });
+//     }
     
-    console.log('⚠️ 开始修复数据库：重置所有订单的 isManuallyModified 为 false');
+//     console.log('⚠️ 开始修复数据库：重置所有订单的 isManuallyModified 为 false');
     
-    // 重置所有订单的 isManuallyModified 为 false
-    const result = await Order.updateMany(
-      {},
-      { $set: { isManuallyModified: false } }
-    );
+//     // 重置所有订单的 isManuallyModified 为 false
+//     const result = await Order.updateMany(
+//       {},
+//       { $set: { isManuallyModified: false } }
+//     );
     
-    console.log(`✅ 修复完成：已重置 ${result.modifiedCount} 个订单的标记`);
+//     console.log(`✅ 修复完成：已重置 ${result.modifiedCount} 个订单的标记`);
     
-    res.json({ 
-      code: 0, 
-      msg: `修复完成，已重置 ${result.modifiedCount} 个订单的 isManuallyModified 为 false`,
-      modifiedCount: result.modifiedCount
-    });
+//     res.json({ 
+//       code: 0, 
+//       msg: `修复完成，已重置 ${result.modifiedCount} 个订单的 isManuallyModified 为 false`,
+//       modifiedCount: result.modifiedCount
+//     });
     
-  } catch (err) {
-    console.error('修复数据库失败:', err);
-    res.json({ code: -1, msg: '修复失败' });
-  }
-});
+//   } catch (err) {
+//     console.error('修复数据库失败:', err);
+//     res.json({ code: -1, msg: '修复失败' });
+//   }
+// });
 
 // ====================== 健康检查接口 ======================
 app.get('/', (req, res) => {
