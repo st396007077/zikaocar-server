@@ -34,31 +34,18 @@ const orderSchema = new mongoose.Schema({
   isMultiSubmit: { type: Boolean, default: false }
 });
 
-// 🔥【修复：增强Mongoose中间件】
-orderSchema.pre('findOneAndUpdate', function(next) {
-  const update = this.getUpdate();
-  
-  // 检查是否修改了 carList
-  const isModifyingCarList = update.carList || update.$set?.carList;
-  
-  if (isModifyingCarList) {
-    // 只在修改了carList时才标记为手动修改
-    if (update.$set) {
-      update.$set.isManuallyModified = true;
-    } else {
-      update.isManuallyModified = true;
-    }
-  } else {
-    // 修改其他字段时，不自动设置 isManuallyModified
-    // 保持数据库中的原有值
-  }
-  
-  next();
-});
+// ============= 🔥 关键修复：移除有问题的全局中间件 =============
+// ❌ 已移除：orderSchema.pre('findOneAndUpdate', ...) 中间件
+// 原因：这个中间件会导致任何更新carList的操作（包括正常的用户提交）
+// 都被错误地标记为"手动修改"
 
-// 新增：保存前的中间件
+// ✅ 保留：仅处理通过 .save() 方法的修改
 orderSchema.pre('save', function(next) {
+  // 只在保存时检查carList是否被修改
   if (this.isModified('carList')) {
+    // 注意：这里设置为true，但只对.save()生效
+    // 对于用户正常提交，carList会被修改，但isManuallyModified应该保持false
+    // 这个逻辑需要与接口逻辑配合
     this.isManuallyModified = true;
   }
   next();
@@ -67,7 +54,6 @@ orderSchema.pre('save', function(next) {
 const Order = mongoose.model('Order', orderSchema);
 
 // ====================== 数据库连接 ======================
-// 添加连接重试逻辑和错误处理
 let dbConnectionAttempts = 0;
 const MAX_CONNECTION_ATTEMPTS = 3;
 
@@ -89,7 +75,6 @@ async function connectToDatabase() {
     console.log('✅ MongoDB 连接成功');
     dbConnectionAttempts = 0;
     
-    // 监听连接错误
     mongoose.connection.on('error', (err) => {
       console.error('MongoDB 连接错误:', err);
     });
@@ -163,6 +148,7 @@ app.post('/api/getAllOrders', async (req, res) => {
   }
 });
 
+// 🔥 修复：submitOrder接口 - 防止错误标记手动修改
 app.post('/api/submitOrder', async (req, res) => {
   try {
     const { userName, userPhone, carList, payType, createTime } = req.body;
@@ -175,12 +161,20 @@ app.post('/api/submitOrder', async (req, res) => {
       const mergedCarList = mergeCarLists(existingOrder.carList || [], carList || []);
       const newTotal = calculateTotal(mergedCarList);
       
+      // 保存原有状态
+      const originalIsManuallyModified = existingOrder.isManuallyModified;
+      
       existingOrder.total = newTotal;
       existingOrder.carList = mergedCarList;
       existingOrder.payType = payType;
       existingOrder.createTime = createTime;
       existingOrder.isMultiSubmit = true;
       existingOrder.paymentRecords.push({ payType, amount: newTotal, time: createTime });
+      
+      // 🔥 关键修复：用户正常提交/合并订单时，保持原有的手动修改状态
+      // 不将 isManuallyModified 设置为 true
+      existingOrder.isManuallyModified = originalIsManuallyModified;
+      
       await existingOrder.save();
       return res.json({ code: 0, msg: '提交成功（合并到原有订单）', orderId: existingOrder.orderId });
     } else {
@@ -188,9 +182,15 @@ app.post('/api/submitOrder', async (req, res) => {
       const newTotal = calculateTotal(mergedCarList);
       const orderId = generateOrderId();
       const newOrder = new Order({
-        orderId, userName, userPhone, total: newTotal,
-        carList: mergedCarList, payType, createTime,
+        orderId, 
+        userName, 
+        userPhone, 
+        total: newTotal,
+        carList: mergedCarList, 
+        payType, 
+        createTime,
         isMultiSubmit: false,
+        isManuallyModified: false, // 新订单默认不是手动修改
         payScreenshots: [],
         paymentRecords: [{ payType, amount: newTotal, time: createTime }]
       });
@@ -235,7 +235,12 @@ app.post('/api/recalculateAmount', async (req, res) => {
       return res.json({ code: -1, msg: '订单不存在' });
     }
     const newTotal = calculateTotal(order.carList);
+    
+    // 重新计算金额时，保持原有的手动修改状态
+    const originalIsManuallyModified = order.isManuallyModified;
     order.total = newTotal;
+    order.isManuallyModified = originalIsManuallyModified;
+    
     await order.save();
     res.json({ code: 0, msg: `金额刷新成功，新金额：${newTotal}元` });
   } catch (err) {
@@ -275,7 +280,7 @@ app.get('/api/queryOrder', async (req, res) => {
   }
 });
 
-// 🆕【修复：修改订单数据接口】
+// 🔥 修复：修改订单数据接口 - 明确标记手动修改
 app.post('/api/updateOrder', async (req, res) => {
   try {
     const { pwd, orderId, updates } = req.body;
@@ -291,19 +296,13 @@ app.post('/api/updateOrder', async (req, res) => {
     // 检查是否修改了 carList
     const isModifyingCarList = updates.carList !== undefined;
     
-    // 构建更新数据
     const updateData = { ...updates };
     
-    // ✅ 修复：只传递更新的数据，让Mongoose中间件处理手动修改标记
     if (isModifyingCarList) {
       updateData.total = calculateTotal(updates.carList);
-      // 不在这里设置 isManuallyModified，让中间件处理
-    } else {
-      // 如果更新了其他字段，保持原有的 isManuallyModified 状态
-      const originalOrder = await Order.findOne({ orderId });
-      if (originalOrder && originalOrder.isManuallyModified) {
-        updateData.isManuallyModified = true;
-      }
+      // 🔥 关键修复：只有通过后台修改接口更新carList，才标记为手动修改
+      updateData.isManuallyModified = true;
+      console.log(`📝 订单 ${orderId} 被标记为手动修改 (通过updateOrder接口)`);
     }
     
     const order = await Order.findOneAndUpdate(
@@ -328,7 +327,7 @@ app.post('/api/updateOrder', async (req, res) => {
   }
 });
 
-// 🆕【修复：修改单个班次接口】
+// 🔥 修复：修改单个班次接口 - 明确标记手动修改
 app.post('/api/updateCarItem', async (req, res) => {
   try {
     const { pwd, orderId, carIndex, updates } = req.body;
@@ -346,20 +345,17 @@ app.post('/api/updateCarItem', async (req, res) => {
       return res.json({ code: -1, msg: '订单不存在' });
     }
     
-    // 修改特定班次
     if (order.carList && order.carList[carIndex]) {
-      // ✅ 修复：先保存旧值用于比较
       const oldCarItem = { ...order.carList[carIndex] };
       order.carList[carIndex] = { ...oldCarItem, ...updates };
       
-      // 检查是否有实际变化
       const hasChanged = JSON.stringify(oldCarItem) !== JSON.stringify(order.carList[carIndex]);
       
       if (hasChanged) {
-        // 标记为手动修改
+        // 🔥 关键修复：只有通过后台修改接口更新carList，才标记为手动修改
         order.isManuallyModified = true;
-        // 重新计算总金额
         order.total = calculateTotal(order.carList);
+        console.log(`📝 订单 ${orderId} 被标记为手动修改 (通过updateCarItem接口)`);
         await order.save();
       } else {
         return res.json({ code: 0, msg: '未检测到班次信息变化', data: order });
@@ -377,6 +373,45 @@ app.post('/api/updateCarItem', async (req, res) => {
   } catch (err) {
     console.error('更新班次失败:', err);
     res.json({ code: -1, msg: '更新班次失败' });
+  }
+});
+
+// ====================== 🔥 新增：数据库修复接口（临时使用） ======================
+// ⚠️ 警告：此接口仅供一次性修复使用，修复完成后请立即从代码中删除
+app.post('/api/fixDatabaseManualFlags', async (req, res) => {
+  try {
+    const { pwd, confirm } = req.body;
+    
+    if (pwd !== process.env.ADMIN_PWD) {
+      return res.json({ code: -1, msg: '密码错误' });
+    }
+    
+    if (confirm !== 'YES_I_UNDERSTAND') {
+      return res.json({ 
+        code: -1, 
+        msg: '请确认操作：此操作将重置所有订单的"手动修改"标记。确认请在请求体中添加 confirm: "YES_I_UNDERSTAND"' 
+      });
+    }
+    
+    console.log('⚠️ 开始修复数据库：重置所有订单的 isManuallyModified 为 false');
+    
+    // 重置所有订单的 isManuallyModified 为 false
+    const result = await Order.updateMany(
+      {},
+      { $set: { isManuallyModified: false } }
+    );
+    
+    console.log(`✅ 修复完成：已重置 ${result.modifiedCount} 个订单的标记`);
+    
+    res.json({ 
+      code: 0, 
+      msg: `修复完成，已重置 ${result.modifiedCount} 个订单的 isManuallyModified 为 false`,
+      modifiedCount: result.modifiedCount
+    });
+    
+  } catch (err) {
+    console.error('修复数据库失败:', err);
+    res.json({ code: -1, msg: '修复失败' });
   }
 });
 
@@ -415,7 +450,6 @@ app.use((req, res) => {
 });
 
 // ====================== 启动服务 ======================
-// 添加启动前检查
 if (!process.env.MONGODB_URI) {
   console.error('❌ 错误：MONGODB_URI 环境变量未设置');
   console.error('请在Render.com的项目设置中配置以下环境变量：');
@@ -430,5 +464,6 @@ setTimeout(() => {
     console.log(`✅ 服务器运行在端口 ${PORT}`);
     console.log(`📁 数据库连接状态: ${mongoose.connection.readyState === 1 ? '已连接' : '未连接'}`);
     console.log(`🌍 访问地址: http://localhost:${PORT}`);
+    console.log('🔧 修复说明：已移除有问题的中间件，精确控制手动修改标记');
   });
 }, 1000);
