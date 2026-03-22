@@ -33,7 +33,7 @@ const orderSchema = new mongoose.Schema({
     to: String
   }],
   payType: { type: String, required: true },
-  createTime: { type: String, required: true },
+  createTime: { type: String, required: true }, // 最后提交时间
   payScreenshots: [{ type: String }], // 存储Base64格式截图
   paymentRecords: [{
     payType: String,
@@ -82,7 +82,7 @@ app.post('/api/getAllOrders', adminLimiter, async (req, res) => {
 });
 
 /**
- * 2. 用户提交订单
+ * 2. 用户提交订单（核心修改：合并同用户订单，不再新增）
  */
 app.post('/api/submitOrder', async (req, res) => {
   try {
@@ -93,32 +93,42 @@ app.post('/api/submitOrder', async (req, res) => {
       return res.json({ code: -1, msg: '参数不全' });
     }
 
-    // 检查是否重复提交（相同手机号+相同班次）
+    // 核心修改：按「姓名+电话」查找用户已有订单（而非原有的班次匹配）
     const existingOrder = await Order.findOne({
-      userPhone,
-      'carList.name': { $in: carList.map(item => item.name) }
-    });
-
-    let orderId = generateOrderId();
-    // 多次提交标记
-    const isMultiSubmit = !!existingOrder;
-
-    // 创建新订单
-    const newOrder = new Order({
-      orderId,
       userName,
-      userPhone,
-      total,
-      carList,
-      payType,
-      createTime,
-      isMultiSubmit,
-      payScreenshots: [],
-      paymentRecords: [{ payType, amount: total, time: createTime }]
+      userPhone
     });
 
-    await newOrder.save();
-    res.json({ code: 0, msg: '提交成功', orderId });
+    if (existingOrder) {
+      // 已有订单：合并数据（不新增订单）
+      existingOrder.total = total; // 更新为最新金额
+      existingOrder.carList = carList; // 更新为最新班次
+      existingOrder.payType = payType; // 更新为最新支付方式
+      existingOrder.createTime = createTime; // 更新为最后提交时间
+      existingOrder.isMultiSubmit = true; // 标记为多次提交
+      // 追加支付记录（保留所有提交记录）
+      existingOrder.paymentRecords.push({ payType, amount: total, time: createTime });
+      // 保存修改
+      await existingOrder.save();
+      return res.json({ code: 0, msg: '提交成功（合并到原有订单）', orderId: existingOrder.orderId });
+    } else {
+      // 无订单：创建新订单
+      const orderId = generateOrderId();
+      const newOrder = new Order({
+        orderId,
+        userName,
+        userPhone,
+        total,
+        carList,
+        payType,
+        createTime,
+        isMultiSubmit: false, // 首次提交
+        payScreenshots: [],
+        paymentRecords: [{ payType, amount: total, time: createTime }]
+      });
+      await newOrder.save();
+      return res.json({ code: 0, msg: '提交成功', orderId });
+    }
   } catch (err) {
     console.error('提交订单失败:', err);
     res.json({ code: -1, msg: '提交失败，请重试' });
