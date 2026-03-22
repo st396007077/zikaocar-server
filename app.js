@@ -62,13 +62,41 @@ function generateOrderId() {
   return `SQY${dateStr}${randomStr}`;
 }
 
-// ====================== 核心接口（修复密码传输） ======================
+// ✅ 新增：班次合并工具函数（核心修复）
+// 合并新旧班次列表，保留所有班次，同名班次保留最新信息
+function mergeCarLists(oldList, newList) {
+  // 1. 原有班次转Map（按名称索引）
+  const carMap = new Map();
+  oldList.forEach(car => {
+    if (car.name) {
+      carMap.set(car.name, car);
+    }
+  });
+
+  // 2. 新班次覆盖同名旧班次，新增班次直接添加
+  newList.forEach(car => {
+    if (car.name) {
+      carMap.set(car.name, car);
+    }
+  });
+
+  // 3. 按固定顺序排序（和前端一致）
+  const FIXED_CAR_ORDER = [
+    '4月11日早送','4月11日晚接','4月12日早送','4月12日晚接',
+    '4月11日中午考点更换','4月12日中午考点更换'
+  ];
+  
+  return FIXED_CAR_ORDER
+    .filter(name => carMap.has(name)) // 只保留已选班次
+    .map(name => carMap.get(name));   // 按固定顺序返回
+}
+
+// ====================== 核心接口 ======================
 /**
  * 1. 管理员获取所有订单（POST请求，密码放请求体）
  */
 app.post('/api/getAllOrders', adminLimiter, async (req, res) => {
   try {
-    // 从请求体获取密码，而非URL参数
     const { pwd } = req.body;
     if (pwd !== process.env.ADMIN_PWD) {
       return res.json({ code: -1, msg: '密码错误' });
@@ -82,7 +110,7 @@ app.post('/api/getAllOrders', adminLimiter, async (req, res) => {
 });
 
 /**
- * 2. 用户提交订单（核心修改：合并同用户订单，不再新增）
+ * 2. 用户提交订单（核心修复：合并班次信息，不丢失历史）
  */
 app.post('/api/submitOrder', async (req, res) => {
   try {
@@ -93,16 +121,19 @@ app.post('/api/submitOrder', async (req, res) => {
       return res.json({ code: -1, msg: '参数不全' });
     }
 
-    // 核心修改：按「姓名+电话」查找用户已有订单（而非原有的班次匹配）
+    // 按「姓名+电话」查找用户已有订单
     const existingOrder = await Order.findOne({
       userName,
       userPhone
     });
 
     if (existingOrder) {
-      // 已有订单：合并数据（不新增订单）
+      // 已有订单：合并数据（核心修复：班次合并）
+      // ✅ 关键修改：合并新旧班次列表，不再直接覆盖
+      const mergedCarList = mergeCarLists(existingOrder.carList || [], carList || []);
+
       existingOrder.total = total; // 更新为最新金额
-      existingOrder.carList = carList; // 更新为最新班次
+      existingOrder.carList = mergedCarList; // ✅ 使用合并后的班次列表
       existingOrder.payType = payType; // 更新为最新支付方式
       existingOrder.createTime = createTime; // 更新为最后提交时间
       existingOrder.isMultiSubmit = true; // 标记为多次提交
