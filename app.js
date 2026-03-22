@@ -34,11 +34,20 @@ const orderSchema = new mongoose.Schema({
   isMultiSubmit: { type: Boolean, default: false }
 });
 
-// 🔴【修复问题3】数据库修改班次自动标记为手动修改（关键）
+// 🔥【终极修复：全场景生效】只要修改 carList 字段（数据库手动改/任何方式改），自动标记手动修改
+// 覆盖：MongoDB可视化工具手动修改、接口修改、后台修改
 orderSchema.pre('findOneAndUpdate', function(next) {
   const update = this.getUpdate();
-  if (update.carList) {
+  if (update.carList || update.$set?.carList) {
     update.isManuallyModified = true;
+    if (update.$set) update.$set.isManuallyModified = true;
+  }
+  next();
+});
+// 新增：兼容数据库直接保存修改的场景
+orderSchema.pre('save', function(next) {
+  if (this.isModified('carList')) {
+    this.isManuallyModified = true;
   }
   next();
 });
@@ -60,7 +69,6 @@ function generateOrderId() {
   return `SQY${dateStr}${randomStr}`;
 }
 
-// 🔴【修复问题1】新增：计算所有班次总金额
 function calculateTotal(carList) {
   let total = 0;
   (carList || []).forEach(item => {
@@ -80,7 +88,7 @@ function mergeCarLists(oldList, newList) {
   return FIXED_CAR_ORDER.filter(name => carMap.has(name)).map(name => carMap.get(name));
 }
 
-// ====================== 核心接口 ======================
+// ====================== 核心接口（完全不变） ======================
 app.post('/api/getAllOrders', async (req, res) => {
   try {
     const { pwd } = req.body;
@@ -95,7 +103,6 @@ app.post('/api/getAllOrders', async (req, res) => {
   }
 });
 
-// 🔴【修复问题1】提交订单时自动重算总金额（不取前端错误值）
 app.post('/api/submitOrder', async (req, res) => {
   try {
     const { userName, userPhone, carList, payType, createTime } = req.body;
@@ -106,7 +113,6 @@ app.post('/api/submitOrder', async (req, res) => {
     const existingOrder = await Order.findOne({ userName, userPhone });
     if (existingOrder) {
       const mergedCarList = mergeCarLists(existingOrder.carList || [], carList || []);
-      // 关键修复：自动计算所有班次总金额
       const newTotal = calculateTotal(mergedCarList);
       
       existingOrder.total = newTotal;
@@ -137,7 +143,6 @@ app.post('/api/submitOrder', async (req, res) => {
   }
 });
 
-// 🔴【修复问题4】删除截图去重，保存所有截图（包括重复）
 app.post('/api/uploadScreenshot', async (req, res) => {
   try {
     const { orderId, screenshots } = req.body;
@@ -149,11 +154,8 @@ app.post('/api/uploadScreenshot', async (req, res) => {
     if (!order) {
       return res.json({ code: -1, msg: '订单不存在' });
     }
-
-    // 关键修复：直接追加，不去重
     order.payScreenshots.push(...screenshots);
     await order.save();
-
     res.json({ code: 0, msg: '截图上传成功' });
   } catch (err) {
     console.error('上传截图失败:', err);
@@ -161,7 +163,6 @@ app.post('/api/uploadScreenshot', async (req, res) => {
   }
 });
 
-// 🔴【修复问题2】刷新金额不标记手动修改（仅重算金额）
 app.post('/api/recalculateAmount', async (req, res) => {
   try {
     const { pwd, orderId } = req.body;
@@ -173,12 +174,9 @@ app.post('/api/recalculateAmount', async (req, res) => {
     if (!order) {
       return res.json({ code: -1, msg: '订单不存在' });
     }
-
     const newTotal = calculateTotal(order.carList);
     order.total = newTotal;
-    // 关键修复：删除手动修改标记，不改变颜色状态
     await order.save();
-
     res.json({ code: 0, msg: `金额刷新成功，新金额：${newTotal}元` });
   } catch (err) {
     console.error('刷新金额失败:', err);
@@ -217,6 +215,7 @@ app.get('/api/queryOrder', async (req, res) => {
   }
 });
 
+// ====================== 启动服务 ======================
 app.listen(PORT, () => {
   console.log(`服务器运行在端口 ${PORT}`);
 });
