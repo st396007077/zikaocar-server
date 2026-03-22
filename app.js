@@ -34,17 +34,29 @@ const orderSchema = new mongoose.Schema({
   isMultiSubmit: { type: Boolean, default: false }
 });
 
-// 🔥【终极修复：全场景生效】只要修改 carList 字段（数据库手动改/任何方式改），自动标记手动修改
-// 覆盖：MongoDB可视化工具手动修改、接口修改、后台修改
+// 🔥【修复：增强Mongoose中间件】
 orderSchema.pre('findOneAndUpdate', function(next) {
   const update = this.getUpdate();
-  if (update.carList || update.$set?.carList) {
-    update.isManuallyModified = true;
-    if (update.$set) update.$set.isManuallyModified = true;
+  
+  // 检查是否修改了 carList
+  const isModifyingCarList = update.carList || update.$set?.carList;
+  
+  if (isModifyingCarList) {
+    // 只在修改了carList时才标记为手动修改
+    if (update.$set) {
+      update.$set.isManuallyModified = true;
+    } else {
+      update.isManuallyModified = true;
+    }
+  } else {
+    // 修改其他字段时，不自动设置 isManuallyModified
+    // 保持数据库中的原有值
   }
+  
   next();
 });
-// 新增：兼容数据库直接保存修改的场景
+
+// 新增：保存前的中间件
 orderSchema.pre('save', function(next) {
   if (this.isModified('carList')) {
     this.isManuallyModified = true;
@@ -263,7 +275,7 @@ app.get('/api/queryOrder', async (req, res) => {
   }
 });
 
-// 🆕【新增接口：修改订单数据】
+// 🆕【修复：修改订单数据接口】
 app.post('/api/updateOrder', async (req, res) => {
   try {
     const { pwd, orderId, updates } = req.body;
@@ -279,15 +291,19 @@ app.post('/api/updateOrder', async (req, res) => {
     // 检查是否修改了 carList
     const isModifyingCarList = updates.carList !== undefined;
     
-    const updateData = { 
-      ...updates,
-      // 🔥 如果修改了 carList，自动标记为手动修改
-      isManuallyModified: isModifyingCarList
-    };
+    // 构建更新数据
+    const updateData = { ...updates };
     
-    // 如果修改了 carList，重新计算总金额
+    // ✅ 修复：只传递更新的数据，让Mongoose中间件处理手动修改标记
     if (isModifyingCarList) {
       updateData.total = calculateTotal(updates.carList);
+      // 不在这里设置 isManuallyModified，让中间件处理
+    } else {
+      // 如果更新了其他字段，保持原有的 isManuallyModified 状态
+      const originalOrder = await Order.findOne({ orderId });
+      if (originalOrder && originalOrder.isManuallyModified) {
+        updateData.isManuallyModified = true;
+      }
     }
     
     const order = await Order.findOneAndUpdate(
@@ -312,7 +328,7 @@ app.post('/api/updateOrder', async (req, res) => {
   }
 });
 
-// 🆕【新增接口：修改单个班次】
+// 🆕【修复：修改单个班次接口】
 app.post('/api/updateCarItem', async (req, res) => {
   try {
     const { pwd, orderId, carIndex, updates } = req.body;
@@ -332,12 +348,22 @@ app.post('/api/updateCarItem', async (req, res) => {
     
     // 修改特定班次
     if (order.carList && order.carList[carIndex]) {
-      order.carList[carIndex] = { ...order.carList[carIndex], ...updates };
-      // 🔥 标记为手动修改
-      order.isManuallyModified = true;
-      // 重新计算总金额
-      order.total = calculateTotal(order.carList);
-      await order.save();
+      // ✅ 修复：先保存旧值用于比较
+      const oldCarItem = { ...order.carList[carIndex] };
+      order.carList[carIndex] = { ...oldCarItem, ...updates };
+      
+      // 检查是否有实际变化
+      const hasChanged = JSON.stringify(oldCarItem) !== JSON.stringify(order.carList[carIndex]);
+      
+      if (hasChanged) {
+        // 标记为手动修改
+        order.isManuallyModified = true;
+        // 重新计算总金额
+        order.total = calculateTotal(order.carList);
+        await order.save();
+      } else {
+        return res.json({ code: 0, msg: '未检测到班次信息变化', data: order });
+      }
     } else {
       return res.json({ code: -1, msg: '班次不存在' });
     }
