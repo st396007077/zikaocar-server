@@ -1,7 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const multer = require('multer');
 const rateLimit = require('express-rate-limit'); // 新增：接口限流
 const app = express();
 const PORT = process.env.PORT || 3000;
