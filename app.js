@@ -137,7 +137,7 @@ app.post('/api/getAllOrders', async (req, res) => {
   }
 });
 
-// 🔥 修复：submitOrder接口 - 防止错误标记手动修改
+// 🔥 修复：submitOrder接口 - 当用户再次提交时，重置手动修改标记
 app.post('/api/submitOrder', async (req, res) => {
   try {
     const { userName, userPhone, carList, payType, createTime } = req.body;
@@ -150,23 +150,21 @@ app.post('/api/submitOrder', async (req, res) => {
       const mergedCarList = mergeCarLists(existingOrder.carList || [], carList || []);
       const newTotal = calculateTotal(mergedCarList);
       
-      // 保存原有状态
-      const originalIsManuallyModified = existingOrder.isManuallyModified;
-      
+      // 🔥 核心修改：无论原订单是否为手动修改，用户再次提交即视为正常操作
+      // 1. 将 isManuallyModified 重置为 false
+      // 2. 将 isMultiSubmit 设为 true (多次提交)
       existingOrder.total = newTotal;
       existingOrder.carList = mergedCarList;
       existingOrder.payType = payType;
       existingOrder.createTime = createTime;
       existingOrder.isMultiSubmit = true;
+      existingOrder.isManuallyModified = false; // 🆕 重置为“非手动修改”
       existingOrder.paymentRecords.push({ payType, amount: newTotal, time: createTime });
-      
-      // 🔥 关键修复：用户正常提交/合并订单时，明确设置为false
-      // 除非订单原本就是手动修改的
-      existingOrder.isManuallyModified = originalIsManuallyModified;
       
       await existingOrder.save();
       return res.json({ code: 0, msg: '提交成功（合并到原有订单）', orderId: existingOrder.orderId });
     } else {
+      // 首次提交的逻辑不变...
       const mergedCarList = mergeCarLists([], carList || []);
       const newTotal = calculateTotal(mergedCarList);
       const orderId = generateOrderId();
