@@ -1,9 +1,11 @@
 {
   "name": "zikaocar-server",
   "version": "1.0.0",
+  "description": "山青院自考本科考试专车订单管理系统后端",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js" 
+    "start": "node app.js",
+    "dev": "nodemon app.js"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -14,6 +16,9 @@
     "express-rate-limit": "^7.4.1"
   },
   "engines": {
-    "node": ">=14.x" 
-  }
+    "node": ">=14.x"
+  },
+  "keywords": ["order", "management", "express", "mongodb", "cors"],
+  "author": "",
+  "license": "ISC"
 }
