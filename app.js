@@ -13,7 +13,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // 管理员接口限流：1分钟最多5次请求（防止暴力破解）
 const adminLimiter = rateLimit({
   windowMs: 60 * 1000, // 1分钟
-  max: 5, // 最多5次请求
+  max: 30, // 最多5次请求
   message: { code: -1, msg: '请求过于频繁，请稍后再试' },
   standardHeaders: true,
   legacyHeaders: false,
