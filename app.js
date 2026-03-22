@@ -1,221 +1,141 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// ====================== 核心配置 ======================
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// ====================== MongoDB 模型定义 ======================
-const orderSchema = new mongoose.Schema({
-  orderId: { type: String, unique: true, required: true },
-  userName: { type: String, required: true },
-  userPhone: { type: String, required: true },
-  total: { type: Number, required: true },
-  carList: [{
-    name: String,
-    price: String,
-    school: String,
-    from: String,
-    to: String
-  }],
-  payType: { type: String, required: true },
-  createTime: { type: String, required: true },
-  payScreenshots: [{ type: String }],
-  paymentRecords: [{
-    payType: String,
-    amount: Number,
-    time: String
-  }],
-  isManuallyModified: { type: Boolean, default: false },
-  isMultiSubmit: { type: Boolean, default: false }
-});
-
-// 🔥【终极修复：全场景生效】只要修改 carList 字段（数据库手动改/任何方式改），自动标记手动修改
-// 覆盖：MongoDB可视化工具手动修改、接口修改、后台修改
-orderSchema.pre('findOneAndUpdate', function(next) {
-  const update = this.getUpdate();
-  if (update.carList || update.$set?.carList) {
-    update.isManuallyModified = true;
-    if (update.$set) update.$set.isManuallyModified = true;
+// 打开修改订单弹窗
+function openModifyModal(id, orderId) {
+  // 找到对应的订单数据
+  const originalOrder = originalOrderData.find(order => order._id === id);
+  if (!originalOrder) {
+    showModal('错误', '找不到订单数据');
+    return;
   }
-  next();
-});
-// 新增：兼容数据库直接保存修改的场景
-orderSchema.pre('save', function(next) {
-  if (this.isModified('carList')) {
-    this.isManuallyModified = true;
+  
+  // 填充数据
+  document.getElementById('modifyOrderId').innerText = orderId;
+  document.getElementById('modifyCarList').value = JSON.stringify(originalOrder.carList || [], null, 2);
+  document.getElementById('modifyPassword').value = '';
+  
+  // 显示弹窗
+  document.getElementById('modifyModal').style.display = 'flex';
+}
+
+// 关闭修改弹窗
+function closeModifyModal() {
+  document.getElementById('modifyModal').style.display = 'none';
+}
+
+// 提交修改
+async function submitModifyOrder() {
+  const orderId = document.getElementById('modifyOrderId').innerText;
+  const carListStr = document.getElementById('modifyCarList').value;
+  const password = document.getElementById('modifyPassword').value;
+  
+  if (!password) {
+    showModal('提示', '请输入管理密码');
+    return;
   }
-  next();
-});
-
-const Order = mongoose.model('Order', orderSchema);
-
-// ====================== 数据库连接 ======================
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('MongoDB 连接成功'))
-  .catch(err => console.error('MongoDB 连接失败:', err));
-
-// ====================== 工具函数 ======================
-function generateOrderId() {
-  const date = new Date();
-  const dateStr = date.getFullYear().toString() + 
-                  String(date.getMonth() + 1).padStart(2, '0') + 
-                  String(date.getDate()).padStart(2, '0');
-  const randomStr = Math.random().toString(36).substring(2, 8).toUpperCase();
-  return `SQY${dateStr}${randomStr}`;
-}
-
-function calculateTotal(carList) {
-  let total = 0;
-  (carList || []).forEach(item => {
-    total += Number(item.price) || 0;
-  });
-  return total;
-}
-
-function mergeCarLists(oldList, newList) {
-  const carMap = new Map();
-  oldList.forEach(car => { if (car.name) carMap.set(car.name, car); });
-  newList.forEach(car => { if (car.name) carMap.set(car.name, car); });
-  const FIXED_CAR_ORDER = [
-    '4月11日早送','4月11日晚接','4月12日早送','4月12日晚接',
-    '4月11日中午考点更换','4月12日中午考点更换'
-  ];
-  return FIXED_CAR_ORDER.filter(name => carMap.has(name)).map(name => carMap.get(name));
-}
-
-// ====================== 核心接口（完全不变） ======================
-app.post('/api/getAllOrders', async (req, res) => {
+  
+  // 验证JSON格式
+  let carList;
   try {
-    const { pwd } = req.body;
-    if (pwd !== process.env.ADMIN_PWD) {
-      return res.json({ code: -1, msg: '密码错误' });
+    carList = JSON.parse(carListStr);
+    if (!Array.isArray(carList)) {
+      throw new Error('必须是数组格式');
     }
-    const orders = await Order.find().sort({ createTime: -1 });
-    res.json({ code: 0, data: orders });
-  } catch (err) {
-    console.error('获取订单失败:', err);
-    res.json({ code: -1, msg: '获取订单失败' });
+  } catch (e) {
+    showModal('格式错误', '请检查JSON格式是否正确');
+    return;
   }
-});
-
-app.post('/api/submitOrder', async (req, res) => {
+  
+  showLoading("正在修改...");
   try {
-    const { userName, userPhone, carList, payType, createTime } = req.body;
-    if (!userName || !userPhone || !carList || !payType || !createTime) {
-      return res.json({ code: -1, msg: '参数不全' });
-    }
-
-    const existingOrder = await Order.findOne({ userName, userPhone });
-    if (existingOrder) {
-      const mergedCarList = mergeCarLists(existingOrder.carList || [], carList || []);
-      const newTotal = calculateTotal(mergedCarList);
-      
-      existingOrder.total = newTotal;
-      existingOrder.carList = mergedCarList;
-      existingOrder.payType = payType;
-      existingOrder.createTime = createTime;
-      existingOrder.isMultiSubmit = true;
-      existingOrder.paymentRecords.push({ payType, amount: newTotal, time: createTime });
-      await existingOrder.save();
-      return res.json({ code: 0, msg: '提交成功（合并到原有订单）', orderId: existingOrder.orderId });
+    const response = await fetch(`${SERVER_URL}/api/updateOrder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pwd: password,
+        orderId: orderId,
+        updates: {
+          carList: carList
+        }
+      })
+    });
+    
+    const data = await response.json();
+    hideLoading();
+    
+    if (data.code === 0) {
+      showModal('修改成功', '订单修改完成，该行将自动标记为红色');
+      closeModifyModal();
+      load(); // 重新加载数据
     } else {
-      const mergedCarList = mergeCarLists([], carList || []);
-      const newTotal = calculateTotal(mergedCarList);
-      const orderId = generateOrderId();
-      const newOrder = new Order({
-        orderId, userName, userPhone, total: newTotal,
-        carList: mergedCarList, payType, createTime,
-        isMultiSubmit: false,
-        payScreenshots: [],
-        paymentRecords: [{ payType, amount: newTotal, time: createTime }]
+      showModal('修改失败', data.msg || '未知错误');
+    }
+  } catch (error) {
+    hideLoading();
+    showModal('网络错误', '修改失败，请检查网络连接');
+  }
+}
+
+// 添加单个班次修改的函数
+async function openModifyCarItemModal(id, orderId, carIndex) {
+  const originalOrder = originalOrderData.find(order => order._id === id);
+  if (!originalOrder || !originalOrder.carList || !originalOrder.carList[carIndex]) {
+    showModal('错误', '找不到班次信息');
+    return;
+  }
+  
+  const carItem = originalOrder.carList[carIndex];
+  const modifyContent = `
+<div style="text-align: left; margin: 20px 0;">
+  <p><strong>班次：</strong>${carItem.name}</p>
+  <p><strong>价格：</strong><input type="text" id="modifyPrice" value="${carItem.price}" style="width: 80px; padding: 5px;"></p>
+  <p><strong>学校：</strong><input type="text" id="modifySchool" value="${carItem.school || ''}" placeholder="单程班次填写学校" style="width: 200px; padding: 5px;"></p>
+  <p><strong>出发学校：</strong><input type="text" id="modifyFrom" value="${carItem.from || ''}" placeholder="考点更换班次填写出发学校" style="width: 200px; padding: 5px;"></p>
+  <p><strong>到达学校：</strong><input type="text" id="modifyTo" value="${carItem.to || ''}" placeholder="考点更换班次填写到达学校" style="width: 200px; padding: 5px;"></p>
+  <p><strong>管理密码：</strong><input type="password" id="modifyCarPassword" placeholder="请输入管理密码" style="width: 200px; padding: 5px;"></p>
+</div>`;
+  
+  if (confirm(`修改 ${carItem.name} 的信息？\n${modifyContent}`)) {
+    const price = document.getElementById('modifyPrice').value;
+    const school = document.getElementById('modifySchool').value;
+    const from = document.getElementById('modifyFrom').value;
+    const to = document.getElementById('modifyTo').value;
+    const password = document.getElementById('modifyCarPassword').value;
+    
+    if (!password) {
+      showModal('提示', '请输入管理密码');
+      return;
+    }
+    
+    const updates = {};
+    if (price) updates.price = price;
+    if (school) updates.school = school;
+    if (from) updates.from = from;
+    if (to) updates.to = to;
+    
+    showLoading("正在修改...");
+    try {
+      const response = await fetch(`${SERVER_URL}/api/updateCarItem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pwd: password,
+          orderId: orderId,
+          carIndex: carIndex,
+          updates: updates
+        })
       });
-      await newOrder.save();
-      return res.json({ code: 0, msg: '提交成功', orderId });
+      
+      const data = await response.json();
+      hideLoading();
+      
+      if (data.code === 0) {
+        showModal('修改成功', '班次修改完成');
+        load(); // 重新加载数据
+      } else {
+        showModal('修改失败', data.msg || '未知错误');
+      }
+    } catch (error) {
+      hideLoading();
+      showModal('网络错误', '修改失败');
     }
-  } catch (err) {
-    console.error('提交订单失败:', err);
-    res.json({ code: -1, msg: '提交失败，请重试' });
   }
-});
-
-app.post('/api/uploadScreenshot', async (req, res) => {
-  try {
-    const { orderId, screenshots } = req.body;
-    if (!orderId || !screenshots || !Array.isArray(screenshots)) {
-      return res.json({ code: -1, msg: '参数错误' });
-    }
-
-    const order = await Order.findOne({ orderId });
-    if (!order) {
-      return res.json({ code: -1, msg: '订单不存在' });
-    }
-    order.payScreenshots.push(...screenshots);
-    await order.save();
-    res.json({ code: 0, msg: '截图上传成功' });
-  } catch (err) {
-    console.error('上传截图失败:', err);
-    res.json({ code: -1, msg: '截图上传失败' });
-  }
-});
-
-app.post('/api/recalculateAmount', async (req, res) => {
-  try {
-    const { pwd, orderId } = req.body;
-    if (pwd !== process.env.ADMIN_PWD) {
-      return res.json({ code: -1, msg: '密码错误' });
-    }
-
-    const order = await Order.findOne({ orderId });
-    if (!order) {
-      return res.json({ code: -1, msg: '订单不存在' });
-    }
-    const newTotal = calculateTotal(order.carList);
-    order.total = newTotal;
-    await order.save();
-    res.json({ code: 0, msg: `金额刷新成功，新金额：${newTotal}元` });
-  } catch (err) {
-    console.error('刷新金额失败:', err);
-    res.json({ code: -1, msg: '刷新金额失败' });
-  }
-});
-
-app.post('/api/deleteOrder', async (req, res) => {
-  try {
-    const { pwd, id } = req.body;
-    if (pwd !== process.env.ADMIN_PWD) {
-      return res.json({ code: -1, msg: '密码错误' });
-    }
-    const result = await Order.findByIdAndDelete(id);
-    if (!result) {
-      return res.json({ code: -1, msg: '订单不存在' });
-    }
-    res.json({ code: 0, msg: '订单删除成功' });
-  } catch (err) {
-    console.error('删除订单失败:', err);
-    res.json({ code: -1, msg: '删除失败' });
-  }
-});
-
-app.get('/api/queryOrder', async (req, res) => {
-  try {
-    const { userName } = req.query;
-    if (!userName) {
-      return res.json({ code: -1, msg: '请输入姓名' });
-    }
-    const orders = await Order.find({ userName: new RegExp(userName) }).sort({ createTime: -1 });
-    res.json({ code: 0, data: orders });
-  } catch (err) {
-    console.error('查询订单失败:', err);
-    res.json({ code: -1, msg: '查询失败' });
-  }
-});
-
-// ====================== 启动服务 ======================
-app.listen(PORT, () => {
-  console.log(`服务器运行在端口 ${PORT}`);
-});
+}
